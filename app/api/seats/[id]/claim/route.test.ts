@@ -22,7 +22,10 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { neon } from '@neondatabase/serverless';
+import { createHmac, randomBytes } from 'node:crypto';
 import { POST } from './route';
+import { SESSION_COOKIE } from '@/lib/session';
+import { __resetRateLimits } from '@/lib/rate-limit';
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -34,26 +37,41 @@ async function warmPool() {
   await Promise.all(Array.from({ length: CONCURRENCY }, () => sql.query('SELECT 1')));
 }
 
-/** A fresh, known-open seat, so each test is independent. */
 async function createOpenSeat(): Promise<string> {
   const label = `${TEST_PREFIX}${crypto.randomUUID()}`;
   const [row] = await sql.query(`INSERT INTO seats (label) VALUES ($1) RETURNING id`, [label]);
   return row.id as string;
 }
 
+/** Mints a cookie the server will accept — same construction as lib/session.ts. */
+function validSessionCookie(id = randomBytes(32).toString('hex')) {
+  const sig = createHmac('sha256', process.env.SESSION_SECRET!).update(id).digest('base64url');
+  return { id, cookie: `${SESSION_COOKIE}=${id}.${sig}` };
+}
+
+type CallOptions = { cookie?: string; ip?: string };
+
 /** Invokes the route handler exactly as Next would. */
-function claim(seatId: string, userId: string) {
+function claim(seatId: string, options: CallOptions = {}) {
+  const headers = new Headers({ 'content-type': 'application/json' });
+  if (options.cookie) headers.set('cookie', options.cookie);
+  // Distinct IPs by default so the per-IP limit does not confound tests that
+  // are about something else.
+  headers.set('x-forwarded-for', options.ip ?? `10.0.0.${Math.floor(Math.random() * 254) + 1}`);
+
   const request = new NextRequest(`http://localhost/api/seats/${seatId}/claim`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ userId }),
+    headers,
   });
   return POST(request, { params: Promise.resolve({ id: seatId }) });
 }
 
 const cleanup = () => sql.query(`DELETE FROM seats WHERE label LIKE '${TEST_PREFIX}%'`);
 
-beforeEach(cleanup);
+beforeEach(async () => {
+  __resetRateLimits();
+  await cleanup();
+});
 afterAll(cleanup);
 
 describe('claim-race harness', () => {
@@ -90,8 +108,10 @@ describe(`POST /api/seats/[id]/claim — ${CONCURRENCY} simultaneous claims`, ()
     await warmPool();
     const seatId = await createOpenSeat();
 
+    // 50 distinct sessions from 50 distinct IPs — genuinely different people.
+    const sessions = Array.from({ length: CONCURRENCY }, () => validSessionCookie());
     const settled = await Promise.allSettled(
-      Array.from({ length: CONCURRENCY }, (_, i) => claim(seatId, `user-${i}`)),
+      sessions.map((s, i) => claim(seatId, { cookie: s.cookie, ip: `10.1.${i >> 8}.${i % 254}` })),
     );
 
     type ClaimResult = Awaited<ReturnType<typeof claim>>;
@@ -109,15 +129,12 @@ describe(`POST /api/seats/[id]/claim — ${CONCURRENCY} simultaneous claims`, ()
       `winners=${winners.length} conflicts=${conflicts.length} ` +
       `other=[${other.join(',')}] threw=${threw.length}`;
 
-    // (1) Exactly one winner.
     expect(winners.length, `expected exactly 1 winner — got ${summary}`).toBe(1);
-
-    // (2) Everyone else is turned away *cleanly* — a 409, not a crash or 500.
     expect(threw.length, `handler threw for ${threw.length} requests`).toBe(0);
     expect(other.length, `unexpected statuses: [${other.join(',')}]`).toBe(0);
     expect(conflicts.length).toBe(CONCURRENCY - 1);
 
-    // (3) The database agrees with whoever we told they won.
+    // The database agrees with whoever we told they won.
     const [seat] = await sql.query(
       `SELECT status, claimed_by, claimed_at FROM seats WHERE id = $1`,
       [seatId],
@@ -127,16 +144,21 @@ describe(`POST /api/seats/[id]/claim — ${CONCURRENCY} simultaneous claims`, ()
 
     const winnerBody = await responses.find((r) => r.status === 200)!.json();
     expect(seat.claimed_by).toBe(winnerBody.seat.claimed_by);
+    // The claimant is a server-issued session id, and it belongs to a real
+    // session we minted — not anything the caller supplied.
+    expect(sessions.map((s) => s.id)).toContain(seat.claimed_by);
   });
 
   it('reports the same claimant to every late caller', async () => {
     const seatId = await createOpenSeat();
-    await claim(seatId, 'first-user');
+    await claim(seatId, { cookie: validSessionCookie().cookie });
     const [before] = await sql.query(`SELECT claimed_by FROM seats WHERE id = $1`, [seatId]);
 
     await warmPool();
     const responses = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => claim(seatId, `late-${i}`)),
+      Array.from({ length: 10 }, (_, i) =>
+        claim(seatId, { cookie: validSessionCookie().cookie, ip: `10.2.0.${i + 1}` }),
+      ),
     );
     expect(responses.every((r) => r.status === 409)).toBe(true);
 
@@ -145,41 +167,122 @@ describe(`POST /api/seats/[id]/claim — ${CONCURRENCY} simultaneous claims`, ()
   });
 });
 
+describe('POST /api/seats/[id]/claim — identity', () => {
+  it('issues an HttpOnly SameSite session cookie to a first-time caller', async () => {
+    const seatId = await createOpenSeat();
+    const response = await claim(seatId);
+
+    const setCookie = response.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain(`${SESSION_COOKIE}=`);
+    expect(setCookie.toLowerCase()).toContain('httponly');
+    expect(setCookie.toLowerCase()).toContain('samesite=lax');
+    expect(setCookie.toLowerCase()).toContain('path=/');
+  });
+
+  it('ignores any identity supplied in the request body', async () => {
+    const seatId = await createOpenSeat();
+    const { id, cookie } = validSessionCookie();
+
+    const headers = new Headers({ 'content-type': 'application/json', cookie });
+    headers.set('x-forwarded-for', '10.3.0.1');
+    const request = new NextRequest(`http://localhost/api/seats/${seatId}/claim`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ userId: 'ceo@victim-corp.example' }),
+    });
+    const response = await POST(request, { params: Promise.resolve({ id: seatId }) });
+    expect(response.status).toBe(200);
+
+    const [seat] = await sql.query(`SELECT claimed_by FROM seats WHERE id = $1`, [seatId]);
+    expect(seat.claimed_by).toBe(id);
+    expect(seat.claimed_by).not.toBe('ceo@victim-corp.example');
+  });
+
+  it('rejects a forged cookie and issues a fresh session instead', async () => {
+    const seatId = await createOpenSeat();
+    const forgedId = randomBytes(32).toString('hex');
+
+    const response = await claim(seatId, {
+      cookie: `${SESSION_COOKIE}=${forgedId}.not-a-valid-signature`,
+    });
+    expect(response.status).toBe(200);
+
+    const [seat] = await sql.query(`SELECT claimed_by FROM seats WHERE id = $1`, [seatId]);
+    // The forged identity was discarded, not honoured.
+    expect(seat.claimed_by).not.toBe(forgedId);
+    expect(response.headers.get('set-cookie')).toContain(SESSION_COOKIE);
+  });
+
+  it('honours a valid cookie without reissuing one', async () => {
+    const seatId = await createOpenSeat();
+    const { id, cookie } = validSessionCookie();
+
+    const response = await claim(seatId, { cookie });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('set-cookie')).toBeNull();
+
+    const [seat] = await sql.query(`SELECT claimed_by FROM seats WHERE id = $1`, [seatId]);
+    expect(seat.claimed_by).toBe(id);
+  });
+});
+
+describe('POST /api/seats/[id]/claim — rate limiting', () => {
+  it('429s a single session that floods the endpoint', async () => {
+    const { cookie } = validSessionCookie();
+    const seatIds = await Promise.all(Array.from({ length: 15 }, () => createOpenSeat()));
+
+    const statuses: number[] = [];
+    for (const seatId of seatIds) {
+      statuses.push((await claim(seatId, { cookie, ip: '10.4.0.1' })).status);
+    }
+
+    const blocked = statuses.filter((s) => s === 429);
+    expect(blocked.length, `expected some 429s, got [${statuses.join(',')}]`).toBeGreaterThan(0);
+  });
+
+  it('sends Retry-After with a 429', async () => {
+    const { cookie } = validSessionCookie();
+    const seatIds = await Promise.all(Array.from({ length: 15 }, () => createOpenSeat()));
+
+    let limited: Response | null = null;
+    for (const seatId of seatIds) {
+      const r = await claim(seatId, { cookie, ip: '10.4.0.2' });
+      if (r.status === 429) { limited = r; break; }
+    }
+
+    expect(limited).not.toBeNull();
+    expect(Number(limited!.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it('limits by IP even across different sessions', async () => {
+    const seatIds = await Promise.all(Array.from({ length: 40 }, () => createOpenSeat()));
+
+    const statuses: number[] = [];
+    for (const seatId of seatIds) {
+      // Fresh session every time, but the same IP.
+      statuses.push((await claim(seatId, { cookie: validSessionCookie().cookie, ip: '10.5.0.9' })).status);
+    }
+
+    expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+  });
+});
+
 describe('POST /api/seats/[id]/claim — input handling', () => {
   it('404s for a seat that does not exist', async () => {
-    const response = await claim(crypto.randomUUID(), 'nobody');
+    const response = await claim(crypto.randomUUID());
     expect(response.status).toBe(404);
   });
 
   it('400s for a malformed seat id rather than crashing', async () => {
     // A non-UUID reaches Postgres as invalid_text_representation (22P02) and
     // would surface as a 500 if not guarded before the query.
-    const response = await claim('not-a-uuid', 'someone');
+    const response = await claim('not-a-uuid');
     expect(response.status).toBe(400);
   });
 
-  it('400s when userId is blank', async () => {
+  it('succeeds with no body at all — the body is not an input any more', async () => {
     const seatId = await createOpenSeat();
-    const request = new NextRequest(`http://localhost/api/seats/${seatId}/claim`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ userId: '   ' }),
-    });
-    const response = await POST(request, { params: Promise.resolve({ id: seatId }) });
-    expect(response.status).toBe(400);
-
-    const [seat] = await sql.query(`SELECT status FROM seats WHERE id = $1`, [seatId]);
-    expect(seat.status).toBe('open');
-  });
-
-  it('400s when userId is missing', async () => {
-    const seatId = await createOpenSeat();
-    const request = new NextRequest(`http://localhost/api/seats/${seatId}/claim`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    const response = await POST(request, { params: Promise.resolve({ id: seatId }) });
-    expect(response.status).toBe(400);
+    const response = await claim(seatId);
+    expect(response.status).toBe(200);
   });
 });

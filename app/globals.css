@@ -1,14 +1,25 @@
 @import "tailwindcss";
 /* Single source of truth for colour, type and motion. Never hard-code a hex
-   or an easing number in scene code — read it from here. */
+   or an easing number in scene or chrome code — read it from here.
+ *
+ * NOTE: `shadcn init` writes its own :root theme here, which redefines
+ * --accent (and --background/--foreground) AFTER this import and therefore
+ * wins the cascade — silently replacing the project accent with a grey. The
+ * MagicUI components pulled for the story section need only `cn` and
+ * `motion`, not shadcn's colour system, so that theme is deliberately absent.
+ * Re-running `shadcn init` will reintroduce it; check --accent afterwards. */
 @import "../design-tokens.css";
 
 html,
 body {
-  height: 100%;
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-display);
-  overflow: hidden; /* the scene owns the viewport */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The story section scrolls; the grid below it is a full-height section. */
+body {
+  overflow-x: hidden;
 }

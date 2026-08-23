@@ -377,7 +377,33 @@ export default function SeatGrid({ seats }: { seats: Seat[] }) {
 
       renderer.render(scene, camera);
     };
-    tick();
+
+    // Render only while the grid is actually on screen. The story section
+    // above it is a full viewport tall, so without this the scene burns the
+    // main thread at 60fps while nobody is looking at it — which also wrecks
+    // Total Blocking Time in a Lighthouse run.
+    let running = false;
+    const start = () => {
+      if (running) return;
+      running = true;
+      last = performance.now(); // avoid a huge dt after being paused
+      frame = requestAnimationFrame(tick);
+    };
+    const stop = () => {
+      if (!running) return;
+      running = false;
+      cancelAnimationFrame(frame);
+    };
+
+    const visibility = new IntersectionObserver(
+      ([entry]) => (entry.isIntersecting ? start() : stop()),
+      { threshold: 0 },
+    );
+    visibility.observe(mount);
+
+    // Paint one frame immediately so the grid is never blank before the
+    // observer fires.
+    renderer.render(scene, camera);
 
     // ── Resize ─────────────────────────────────────────────────────────────
     const onResize = () => {
@@ -392,6 +418,7 @@ export default function SeatGrid({ seats }: { seats: Seat[] }) {
     // ── Teardown ───────────────────────────────────────────────────────────
     return () => {
       cancelAnimationFrame(frame);
+      visibility.disconnect();
       observer.disconnect();
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('click', onClick as EventListener);
@@ -406,5 +433,7 @@ export default function SeatGrid({ seats }: { seats: Seat[] }) {
     };
   }, [seats]);
 
-  return <div ref={mountRef} className="fixed inset-0" aria-hidden="true" />;
+  // Absolute, not fixed: the grid is a section of the page now, sitting below
+  // the story rather than owning the whole viewport.
+  return <div ref={mountRef} className="absolute inset-0" aria-hidden="true" />;
 }

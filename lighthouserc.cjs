@@ -26,8 +26,11 @@ module.exports = {
       url: ['http://localhost:3001/'],
       numberOfRuns: RUNS,
       settings: {
-        // The scene owns the viewport and has no scrollable content.
         preset: 'desktop',
+        // Headless, so the run does not depend on the window being focused.
+        // A backgrounded window starves requestAnimationFrame and Lighthouse
+        // reports NO_FCP.
+        chromeFlags: '--headless=new --no-sandbox',
       },
     },
     assert: {

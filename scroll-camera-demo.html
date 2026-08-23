@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scroll-driven spline camera — the Kage mechanic</title>
+<style>
+  :root { --amber:#ffb15e; --bone:#e9e4d8; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior:auto; }
+  body { background:#05080c; color:var(--bone); font-family:'Onest',system-ui,sans-serif; }
+
+  /* The 3D scene is FIXED and full-viewport. It never scrolls.
+     Scrolling only moves a number; the render loop reads that number. */
+  #c { position:fixed; inset:0; width:100vw; height:100vh; display:block; z-index:0; }
+
+  /* "Post-processing" done the cheap Kage way: DOM overlays, not WebGL passes. */
+  #vignette { position:fixed; inset:0; z-index:2; pointer-events:none;
+    background:radial-gradient(120% 100% at 50% 42%, transparent 55%, rgba(0,0,0,.75) 100%); }
+  #grain { position:fixed; inset:0; z-index:3; pointer-events:none; opacity:.06;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); }
+
+  /* The scroll track: tall page of sections. Each section owns one camera waypoint. */
+  main { position:relative; z-index:1; }
+  section { height:100vh; display:flex; align-items:center; padding:0 8vw;
+    /* text layers respond to the active section: they fade/blur when not active */
+    transition:opacity .6s ease, filter .6s ease, transform .6s ease; }
+  section .label { max-width:520px; }
+  .num { font-size:13px; letter-spacing:.3em; opacity:.6; }
+  h1 { font-size:clamp(34px,6vw,76px); line-height:1.02; font-weight:600; margin:.25em 0; }
+  p.sub { font-size:clamp(15px,1.6vw,19px); opacity:.8; max-width:44ch; }
+  /* inactive sections recede — this is the "layers respond to active section" idea */
+  section:not(.active) .label { opacity:.15; filter:blur(3px); transform:translateY(12px); }
+
+  .hint { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); z-index:4;
+    font-size:12px; letter-spacing:.25em; opacity:.5; }
+</style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="vignette"></div>
+  <div id="grain"></div>
+
+  <main>
+    <section data-cam="0" class="active"><div class="label"><div class="num">00 — GATE</div><h1>Scroll to fly the camera.</h1><p class="sub">The scene is fixed. Your scroll is only a number that says how far along a 3D path the camera should be.</p></div></section>
+    <section data-cam="1"><div class="label"><div class="num">01 — APPROACH</div><h1>One continuous path.</h1><p class="sub">Waypoints are threaded onto a Catmull-Rom spline, so the camera glides — it never cuts.</p></div></section>
+    <section data-cam="2"><div class="label"><div class="num">02 — DRIFT</div><h1>Eased, not snapped.</h1><p class="sub">Each frame the camera damps toward the scroll target. That weight is the whole "premium" feel.</p></div></section>
+    <section data-cam="3"><div class="label"><div class="num">03 — DESCENT</div><h1>Fog does the depth.</h1><p class="sub">No expensive render passes — just scene fog plus CSS vignette and grain on top.</p></div></section>
+    <section data-cam="4"><div class="label"><div class="num">04 — THE MOON</div><h1>Everything is code.</h1><p class="sub">Gates, ground, moon — all built procedurally at runtime. Nothing is downloaded.</p></div></section>
+    <section data-cam="5"><div class="label"><div class="num">05 — AFTERLIGHT</div><h1>Now open the source.</h1><p class="sub">Read the comments top to bottom. The core is ~40 lines of camera logic.</p></div></section>
+  </main>
+  <div class="hint">SCROLL</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ------------------------------------------------------------------ helpers */
+const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
+const lerp  = (a,b,t) => a + (b - a) * t;
+// FRAME-RATE-INDEPENDENT DAMPING — the single most important line in Kage.
+// Because it uses dt (seconds since last frame), the feel is identical at any FPS.
+const damp  = (cur,to,rate,dt) => lerp(cur, to, 1 - Math.exp(-rate * dt));
+
+/* ------------------------------------------------------------------ renderer */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05080c, 0.012);   // depth haze, ~free
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.35, 500);
+
+/* ------------------------------------------------------------------ lights */
+scene.add(new THREE.AmbientLight(0x33405a, 0.8));           // cold fill
+const moonLight = new THREE.DirectionalLight(0xbcd0ff, 0.6); // cool moonlight
+moonLight.position.set(0, 60, -260); scene.add(moonLight);
+
+/* ------------------------------------------------ procedural scene (all code) */
+// ground
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(400, 600),
+  new THREE.MeshStandardMaterial({ color:0x0a0f14, roughness:1 })
+);
+ground.rotation.x = -Math.PI/2; ground.position.z = -260; scene.add(ground);
+
+// a big pale moon far down the path
+const moon = new THREE.Mesh(
+  new THREE.SphereGeometry(26, 48, 48),
+  new THREE.MeshBasicMaterial({ color:0xd9432e })   // vermilion, like Kage
+);
+moon.position.set(0, 58, -320); scene.add(moon);
+
+// a row of torii-style gates the camera flies THROUGH, each amber-lit
+const GATE_Z = [-20, -60, -100, -140, -190];
+GATE_Z.forEach((z, i) => {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color:0x140a08, roughness:.9 });
+  const post = new THREE.BoxGeometry(1.2, 16, 1.2);
+  const L = new THREE.Mesh(post, mat); L.position.set(-6, 8, z);
+  const R = new THREE.Mesh(post, mat); R.position.set( 6, 8, z);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(16, 1.6, 1.6), mat);
+  top.position.set(0, 16, z);
+  g.add(L, R, top);
+  // a warm amber lantern glow at each gate
+  const lamp = new THREE.PointLight(0xffb15e, 6, 40, 2);
+  lamp.position.set(0, 9, z + 1); g.add(lamp);
+  scene.add(g);
+});
+
+/* =========================================================== THE CORE MECHANIC */
+// 1) WAYPOINTS: one per section. position (p), look-at target (t), and fov.
+const CAM = [
+  { p:[  0,  9,  14], t:[ 0, 5, -20], fov:52 }, // 0 hero, looking at first gate
+  { p:[  0,  5,  -8], t:[ 0, 4, -50], fov:50 }, // 1 approaching
+  { p:[  4,  4, -46], t:[-2, 4, -80], fov:48 }, // 2 drifting through
+  { p:[ -4,  4, -88], t:[ 2, 4,-120], fov:48 }, // 3 descent
+  { p:[  0,  6,-140], t:[ 0,20,-260], fov:46 }, // 4 tilt up toward moon
+  { p:[  0, 12,-180], t:[ 0,52,-320], fov:44 }, // 5 afterlight, moon fills frame
+];
+
+// 2) SPLINE: thread the waypoints onto smooth curves (positions + targets).
+const curveP = new THREE.CatmullRomCurve3(CAM.map(c => new THREE.Vector3(...c.p)));
+const curveT = new THREE.CatmullRomCurve3(CAM.map(c => new THREE.Vector3(...c.t)));
+const N = CAM.length - 1;
+
+// 3) SCROLL → PROGRESS: turn scrollY into a float in [0, N].
+//    (Kage anchors this per-section; even mapping is enough to see the idea.)
+let maxScroll = 1;
+function measure(){ maxScroll = Math.max(1, document.body.scrollHeight - innerHeight); }
+function progressFor(y){ return clamp(y / maxScroll, 0, 1) * N; }
+
+// 4) State we damp over time.
+const RIG = { smooth:0, mx:0, my:0, tmx:0, tmy:0 };
+const _p = new THREE.Vector3(), _t = new THREE.Vector3();
+
+function applyCamera(){
+  const u = clamp(RIG.smooth / N, 0, 1);
+  curveP.getPoint(u, _p);              // sample position on the spline
+  curveT.getPoint(u, _t);              // sample the look-at target
+  const i = clamp(Math.floor(RIG.smooth), 0, N-1), f = RIG.smooth - i;
+  camera.fov = lerp(CAM[i].fov, CAM[i+1].fov, f);   // blend fov between waypoints
+
+  // mouse parallax: a small hand-held drift on top (never enough to break frame)
+  _p.x += RIG.mx * 1.4;  _p.y += RIG.my * 0.8;
+  _t.x -= RIG.mx * 0.5;  _t.y -= RIG.my * 0.3;
+
+  camera.position.copy(_p);
+  camera.lookAt(_t);
+  camera.updateProjectionMatrix();
+}
+
+/* ------------------------------------------------ active-section DOM response */
+const SECS = [...document.querySelectorAll('[data-cam]')];
+function updateActive(){
+  const idx = clamp(Math.round(RIG.smooth), 0, SECS.length-1);
+  SECS.forEach((s,k) => s.classList.toggle('active', k === idx));
+}
+
+/* ------------------------------------------------------------------ the loop */
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+
+  // read the raw scroll target, then EASE toward it (the premium feel)
+  const target = progressFor(scrollY);
+  RIG.smooth = damp(RIG.smooth, target, 5, dt);
+  RIG.mx = damp(RIG.mx, RIG.tmx, 3, dt);
+  RIG.my = damp(RIG.my, RIG.tmy, 3, dt);
+
+  applyCamera();
+  updateActive();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+/* ------------------------------------------------------------------ wiring */
+function resize(){
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  measure();
+}
+addEventListener('resize', resize);
+addEventListener('scroll', () => {}, { passive:true });   // listener does nothing; loop reads scrollY
+addEventListener('pointermove', e => {                    // -1..1 across viewport
+  RIG.tmx = (e.clientX / innerWidth  - .5) * 2;
+  RIG.tmy = (e.clientY / innerHeight - .5) * 2;
+});
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 import { sql } from '@/lib/db';
 import SeatGrid, { type Seat } from '@/components/SeatGrid';
+import StorySection from '@/components/StorySection';
 
 // Seat availability changes constantly; never serve a cached snapshot.
 export const dynamic = 'force-dynamic';
@@ -18,21 +19,25 @@ export default async function Home() {
     status: row.status as Seat['status'],
   }));
 
-  // The scene itself is a canvas, which is opaque to screen readers and
-  // crawlers — and produces no contentful paint at all, so Lighthouse cannot
-  // even measure the page. This text carries the same information in the DOM.
-  // It is visually hidden, not a HUD.
+  const claimed = seats.filter((seat) => seat.status === 'claimed').length;
+
   return (
-    <>
-      <h1 className="sr-only">Smart Queue — seat selection</h1>
-      <ul className="sr-only">
-        {seats.map((seat) => (
-          <li key={seat.id}>
-            Seat {seat.label}: {seat.status === 'claimed' ? 'already taken' : 'available'}
-          </li>
-        ))}
-      </ul>
-      <SeatGrid seats={seats} />
-    </>
+    <main>
+      <StorySection claimed={claimed} total={seats.length} />
+
+      <section id="grid" className="relative h-screen w-full">
+        {/* The canvas is opaque to screen readers and crawlers; this carries
+            the same information in the DOM. Visually hidden, not a HUD. */}
+        <h2 className="sr-only">Seat grid</h2>
+        <ul className="sr-only">
+          {seats.map((seat) => (
+            <li key={seat.id}>
+              Seat {seat.label}: {seat.status === 'claimed' ? 'already taken' : 'available'}
+            </li>
+          ))}
+        </ul>
+        <SeatGrid seats={seats} />
+      </section>
+    </main>
   );
 }

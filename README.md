@@ -1,36 +1,31 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cinematic Site — Claude Code Starter Kit
 
-## Getting Started
+Claude Code produces "AI slop" when it has to invent **taste** and **technique** on the spot.
+This kit removes both decisions *before* it writes a line, so it only executes decisions already
+made. Taste lives in tokens + references + the brief. Technique lives in skills. The artwork is a
+locked, consistent set with a manifest that tells Claude Code exactly where each piece goes.
 
-First, run the development server:
+## Workflow (per project)
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. **Direction** — collect 3–5 references (Mobbin / awwwards), capture full-page screenshots into
+   `references/`, write `BRIEF.md`, and fill `design-tokens.css` from those references.
+2. **Art** — lock ONE style anchor (see `assets/ASSETS.md`), generate the whole asset set from it,
+   cut the alpha, convert to WebP, and fill the manifest in `assets/ASSETS.md`.
+3. **Technique** — keep or adjust the `skills/*.md` files; they're referenced from `CLAUDE.md`.
+4. **Build** — point Claude Code at `CLAUDE.md`. It reads the brief, tokens, skills, and asset
+   manifest, then builds. Iterate with "change 1–2 things only," never "make it better."
+5. **Verify** — run the ship checklist at the bottom of `BRIEF.md`.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## What's in here
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `CLAUDE.md` — the operating agreement: constraints, quality bar, and the do-not-shortcut rules.
+- `BRIEF.md` — fill one per project: concept, motion, layout, avoid-list, ship checklist.
+- `design-tokens.css` — your taste as concrete values (palette, type, spacing, easing).
+- `references/REFERENCES.md` — what each reference is *for* (drop the screenshots beside it).
+- `assets/ASSETS.md` — the consistency recipe + a manifest of every plate and cutout.
+- `skills/scroll-camera.md` — the scroll-driven spline-camera technique, as a loadable skill.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## The one rule
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+If Claude Code is guessing at a color, an easing curve, a layout, or which asset goes where —
+that's a gap in these files, not a prompt problem. Fill the file; don't argue with the model.

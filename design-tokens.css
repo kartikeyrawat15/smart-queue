@@ -1,0 +1,33 @@
+/* design-tokens.css — your taste, as values Claude Code must use verbatim.
+   Fill these FROM your references so the code-side visuals match the artwork.
+   Example values below are a night-temple palette; replace per project. */
+:root {
+  /* ---- palette (commit to 5–6; more than that is drift) ---- */
+  --bg:      #05080c;   /* near-black base                         */
+  --bg-2:    #0a0f14;   /* raised surface                          */
+  --ink:     #e9e4d8;   /* primary text (bone white)               */
+  --ink-dim: #9a978f;   /* secondary text                          */
+  --accent:  #d9432e;   /* the ONE bold color — use sparingly      */
+  --fog:     #05080c;   /* MUST equal --bg so 3D fog blends to page */
+
+  /* ---- type ---- */
+  --font-display: 'Onest', system-ui, sans-serif;
+  --font-mono:    ui-monospace, monospace;
+  --h1:            clamp(34px, 6vw, 76px);
+  --label:         13px;
+  --tracking-label: .3em;
+  --measure:       44ch;      /* max line length for readability */
+
+  /* ---- spacing / layout ---- */
+  --gutter: 8vw;
+
+  /* ---- motion (the FEEL lives here — tune these, not the scene code) ---- */
+  --cam-damp: 5;              /* camera ease rate; higher = tighter, lower = floatier */
+  --reveal:   .6s;           /* section fade / blur duration */
+  --ease:     cubic-bezier(.22,.61,.36,1);
+}
+
+/* Rule for the build: the 3D scene's fog color and light tints are DERIVED from
+   these tokens. Change a value here, never in the scene code, so the artwork and
+   the code-drawn visuals can never drift apart. That single rule is 80% of
+   "consistent look" on the code side. */

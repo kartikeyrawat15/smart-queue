@@ -45,3 +45,6 @@ next-env.d.ts
 # lighthouse
 .lighthouseci
 *.report.html
+
+# python bytecode from skill scripts
+__pycache__/

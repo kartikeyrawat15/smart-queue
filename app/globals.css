@@ -10,6 +10,17 @@
  * Re-running `shadcn init` will reintroduce it; check --accent afterwards. */
 @import "../design-tokens.css";
 
+/* Pulled MagicUI components reference shadcn's semantic colour names
+   (MagicCard's mask layer uses `bg-background`). Rather than reinstating
+   shadcn's theme — which would override --accent — point those names at our
+   tokens, so the component library inherits this palette instead of shipping
+   its own. Without this the names resolve to nothing and the utilities are
+   simply not generated. */
+@theme inline {
+  --color-background: var(--bg-2);
+  --color-foreground: var(--ink);
+}
+
 html,
 body {
   margin: 0;

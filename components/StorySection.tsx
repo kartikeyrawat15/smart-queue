@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { BlurFade } from '@/components/ui/blur-fade';
 import { NumberTicker } from '@/components/ui/number-ticker';
@@ -73,20 +74,27 @@ export default function StorySection({
       </BlurFade>
 
       <BlurFade delay={0.5} inView>
-        <div className="mt-12 grid max-w-2xl grid-cols-1 gap-px sm:grid-cols-2">
-          <Panel
-            label="check-then-write"
-            value={50}
-            unit="winners"
-            note="Read the seat, then write it. Every caller reads “open” before anyone writes."
-            tone="fail"
-          />
-          <Panel
-            label="atomic update"
-            value={1}
-            unit="winner"
-            note="UPDATE … WHERE status = 'open'. The row lock decides it; 49 get a clean rejection."
-            tone="pass"
+        <div className="mt-12 flex flex-col items-start gap-6 lg:flex-row lg:items-stretch">
+          <div className="grid w-full max-w-2xl grid-cols-1 gap-px sm:grid-cols-2">
+            <Panel
+              label="check-then-write"
+              value={50}
+              unit="winners"
+              note="Read the seat, then write it. Every caller reads “open” before anyone writes."
+              tone="fail"
+            />
+            <Panel
+              label="atomic update"
+              value={1}
+              unit="winner"
+              note="UPDATE … WHERE status = 'open'. The row lock decides it; 49 get a clean rejection."
+              tone="pass"
+            />
+          </div>
+          <AccentCard
+            src="/story/card-mechanism.png"
+            alt="A single illuminated block held in a spotlight against darkness."
+            width={168}
           />
         </div>
       </BlurFade>
@@ -104,7 +112,13 @@ export default function StorySection({
 
       {/* 3 — The call to action, with a live figure from this request. */}
       <BlurFade delay={0.75} inView>
-        <div className="mt-16 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div className="mt-16 flex flex-wrap items-end gap-x-10 gap-y-6">
+          <AccentCard
+            src="/story/card-proof.png"
+            alt="Two blocks under one spotlight — one lit, one left dark."
+            width={132}
+          />
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <a
             href="#grid"
             className="group inline-flex items-baseline gap-3 no-underline"
@@ -129,9 +143,55 @@ export default function StorySection({
             />
             {` of ${total} seats claimed right now`}
           </span>
+          </div>
         </div>
       </BlurFade>
     </section>
+  );
+}
+
+/**
+ * Editorial accent still.
+ *
+ * The sources are large PNGs (853 KB / 980 KB, 1122x1402), so they go through
+ * next/image rather than a plain <img>: it serves a resized WebP/AVIF at the
+ * rendered width, which is what keeps the payload — and the Lighthouse
+ * performance score — where it was. width/height are passed so the box is
+ * reserved before load and CLS stays at zero.
+ */
+function AccentCard({
+  src,
+  alt,
+  width,
+}: {
+  src: string;
+  alt: string;
+  width: number;
+}) {
+  const NATIVE = { w: 1122, h: 1402 };
+  const height = Math.round((width * NATIVE.h) / NATIVE.w);
+  return (
+    <figure
+      className="m-0 shrink-0 self-start p-2"
+      style={{
+        background: 'var(--bg-2)',
+        // Same rule treatment as the stat panels above.
+        borderTop: '2px solid var(--accent)',
+        // Derived from a token rather than a new hex, so the palette stays
+        // the single source of truth.
+        borderInline: '1px solid color-mix(in srgb, var(--ink-dim) 16%, transparent)',
+        borderBottom: '1px solid color-mix(in srgb, var(--ink-dim) 16%, transparent)',
+      }}
+    >
+      <Image
+        src={src}
+        alt={alt}
+        width={width}
+        height={height}
+        sizes={`${width}px`}
+        className="block h-auto w-full"
+      />
+    </figure>
   );
 }
 

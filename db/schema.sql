@@ -27,3 +27,23 @@ CREATE TABLE IF NOT EXISTS seats (
 
 -- Supports "show me what's still available", the most common read.
 CREATE INDEX IF NOT EXISTS seats_status_idx ON seats (status);
+
+-- How many seats each session currently holds.
+--
+-- Why a counter row rather than COUNT(*) over seats: the cap has to be
+-- enforced atomically, and counting inside the claim UPDATE does not do that.
+-- Two concurrent claims for DIFFERENT seats never touch the same seat row, so
+-- they do not block each other, and under READ COMMITTED each reads the tally
+-- from its own snapshot — both see headroom and both succeed. Measured: a
+-- session at 1 of 2 took a third seat.
+--
+-- Incrementing one row per session forces those claims to serialise on that
+-- row, which is the same single-atomic-conditional-UPDATE trick the seat claim
+-- itself uses. Crucially it adds contention only BETWEEN claims of the same
+-- session, so the cross-session race behaviour is untouched.
+CREATE TABLE IF NOT EXISTS session_holdings (
+  session_id text PRIMARY KEY,
+  seats_held integer NOT NULL DEFAULT 0,
+
+  CONSTRAINT session_holdings_non_negative CHECK (seats_held >= 0)
+);

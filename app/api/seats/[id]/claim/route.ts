@@ -32,6 +32,16 @@ const WINDOW_MS = 10_000;
 const MAX_CLAIMS_PER_SESSION = 10;
 const MAX_CLAIMS_PER_IP = 30; // higher: shared NATs and offices sit behind one IP
 
+/**
+ * How many seats one session may hold at once.
+ *
+ * Rate limiting caps the RATE of claims; it does not cap TOTAL HOLDINGS. On a
+ * venue smaller than the rate limit (the seeded venue is 6 seats, the limit is
+ * 10 per 10s) a single session could take every seat without ever being
+ * throttled. This is the control that actually prevents an inventory sweep.
+ */
+const MAX_SEATS_PER_SESSION = 2;
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -62,8 +72,33 @@ export async function POST(
     return respond({ ok: false, error: 'invalid_seat_id' }, 400);
   }
 
+  let reservedSlot = false;
+  let claimSucceeded = false;
+
   try {
-    // ── The atomic claim. One statement, no read-then-write. ──
+    // ── 1. Reserve a holdings slot. Single atomic conditional UPDATE. ──
+    // ON CONFLICT DO UPDATE takes a row lock, so concurrent claims by the
+    // SAME session serialise here and cannot both see headroom. Zero rows
+    // back means the cap is already reached.
+    const reserved = await sql.query(
+      `INSERT INTO session_holdings (session_id, seats_held)
+            VALUES ($1, 1)
+       ON CONFLICT (session_id) DO UPDATE
+              SET seats_held = session_holdings.seats_held + 1
+            WHERE session_holdings.seats_held < $2
+        RETURNING seats_held`,
+      [session.id, MAX_SEATS_PER_SESSION],
+    );
+
+    if (reserved.length === 0) {
+      return respond(
+        { ok: false, error: 'claim_limit_reached', limit: MAX_SEATS_PER_SESSION },
+        403,
+      );
+    }
+    reservedSlot = true;
+
+    // ── 2. The atomic claim. One statement, no read-then-write. ──
     const claimed = await sql.query(
       `UPDATE seats
           SET status     = 'claimed',
@@ -76,6 +111,7 @@ export async function POST(
     );
 
     if (claimed.length === 1) {
+      claimSucceeded = true;
       return respond({ ok: true, seat: claimed[0] }, 200);
     }
 
@@ -98,5 +134,26 @@ export async function POST(
       error: error instanceof Error ? error.message : String(error),
     });
     return respond({ ok: false, error: 'internal_error' }, 500);
+  } finally {
+    // Give the slot back if we reserved one but did not end up holding a seat.
+    // Worst case is a crash between reserve and release, which leaks a slot
+    // (the session can hold fewer seats than the cap) rather than a seat. The
+    // counter is derivable from `seats`, so it can be reconciled if that
+    // becomes a real problem.
+    if (reservedSlot && !claimSucceeded) {
+      try {
+        await sql.query(
+          `UPDATE session_holdings
+              SET seats_held = seats_held - 1
+            WHERE session_id = $1 AND seats_held > 0`,
+          [session.id],
+        );
+      } catch (releaseError) {
+        console.error('[claim] failed to release holdings slot', {
+          sessionId: session.id,
+          error: releaseError instanceof Error ? releaseError.message : String(releaseError),
+        });
+      }
+    }
   }
 }

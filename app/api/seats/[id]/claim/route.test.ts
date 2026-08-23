@@ -66,7 +66,17 @@ function claim(seatId: string, options: CallOptions = {}) {
   return POST(request, { params: Promise.resolve({ id: seatId }) });
 }
 
-const cleanup = () => sql.query(`DELETE FROM seats WHERE label LIKE '${TEST_PREFIX}%'`);
+const cleanup = async () => {
+  await sql.query(`DELETE FROM seats WHERE label LIKE '${TEST_PREFIX}%'`);
+  // Drop holdings rows that no longer correspond to a held seat, which after
+  // the delete above is every session this suite created.
+  await sql.query(
+    `DELETE FROM session_holdings
+      WHERE session_id NOT IN (
+        SELECT claimed_by FROM seats WHERE claimed_by IS NOT NULL
+      )`,
+  );
+};
 
 beforeEach(async () => {
   __resetRateLimits();
@@ -264,6 +274,87 @@ describe('POST /api/seats/[id]/claim — rate limiting', () => {
     }
 
     expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+  });
+});
+
+describe('POST /api/seats/[id]/claim — per-session holdings cap', () => {
+  const CAP = 2;
+
+  it('allows the first two claims and blocks the third', async () => {
+    const { cookie } = validSessionCookie();
+    const seats = await Promise.all(Array.from({ length: 3 }, () => createOpenSeat()));
+
+    const statuses: number[] = [];
+    for (const seatId of seats) {
+      statuses.push((await claim(seatId, { cookie, ip: '10.6.0.1' })).status);
+    }
+
+    expect(statuses.slice(0, CAP), `expected ${CAP} successes, got [${statuses}]`).toEqual(
+      Array(CAP).fill(200),
+    );
+    expect(statuses[CAP], `expected 403 on claim ${CAP + 1}, got [${statuses}]`).toBe(403);
+
+    // The third seat must remain genuinely open, not silently consumed.
+    const [third] = await sql.query(`SELECT status, claimed_by FROM seats WHERE id = $1`, [
+      seats[2],
+    ]);
+    expect(third.status).toBe('open');
+    expect(third.claimed_by).toBeNull();
+  });
+
+  it('reports the limit in the 403 body', async () => {
+    const { cookie } = validSessionCookie();
+    const seats = await Promise.all(Array.from({ length: 3 }, () => createOpenSeat()));
+    for (const seatId of seats.slice(0, CAP)) await claim(seatId, { cookie, ip: '10.6.0.2' });
+
+    const blocked = await claim(seats[2], { cookie, ip: '10.6.0.2' });
+    expect(blocked.status).toBe(403);
+    await expect(blocked.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'claim_limit_reached',
+      limit: CAP,
+    });
+  });
+
+  it('scopes the cap per session — a different session is unaffected', async () => {
+    const first = validSessionCookie();
+    const second = validSessionCookie();
+    const seats = await Promise.all(Array.from({ length: 4 }, () => createOpenSeat()));
+
+    for (const seatId of seats.slice(0, CAP)) await claim(seatId, { cookie: first.cookie, ip: '10.6.0.3' });
+    expect((await claim(seats[2], { cookie: first.cookie, ip: '10.6.0.3' })).status).toBe(403);
+
+    // A different session still gets its own allowance.
+    expect((await claim(seats[2], { cookie: second.cookie, ip: '10.6.0.4' })).status).toBe(200);
+  });
+
+  it('a session at the cap cannot exceed it via concurrent claims', async () => {
+    // The cap lives in a subquery inside the atomic UPDATE, but under READ
+    // COMMITTED each concurrent statement reads the holdings count from its
+    // own snapshot. This test exists to measure whether that is exploitable
+    // rather than to assume either way.
+    await warmPool();
+    const { id: sessionId, cookie } = validSessionCookie();
+    const seats = await Promise.all(Array.from({ length: 8 }, () => createOpenSeat()));
+
+    // Hold one seat, leaving exactly one slot of headroom.
+    expect((await claim(seats[0], { cookie, ip: '10.7.0.1' })).status).toBe(200);
+
+    // Now fire the rest simultaneously. At most ONE may succeed.
+    const results = await Promise.all(
+      seats.slice(1).map((seatId, i) => claim(seatId, { cookie, ip: `10.7.1.${i + 1}` })),
+    );
+    const granted = results.filter((r) => r.status === 200).length;
+
+    const [held] = await sql.query(
+      `SELECT count(*)::int AS n FROM seats WHERE claimed_by = $1 AND status = 'claimed'`,
+      [sessionId],
+    );
+
+    expect(
+      held.n,
+      `session holds ${held.n} seats, cap is ${CAP} (${granted} of the concurrent burst granted)`,
+    ).toBeLessThanOrEqual(CAP);
   });
 });
 

@@ -1,6 +1,7 @@
 import { sql } from '@/lib/db';
 import SeatScene, { type Seat } from '@/components/SeatScene';
 import StorySection from '@/components/StorySection';
+import Hud from '@/components/Hud';
 
 // Seat availability changes constantly; never serve a cached snapshot.
 export const dynamic = 'force-dynamic';
@@ -44,6 +45,10 @@ export default async function Home() {
             </li>
           ))}
         </ul>
+
+        {/* Sits at the bottom of the grid section, so it comes into reach
+            exactly when the camera arrives and the seats become clickable. */}
+        <Hud initialOpen={seats.length - claimed} initialClaimed={claimed} />
       </section>
     </main>
   );

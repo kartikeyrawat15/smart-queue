@@ -18,6 +18,13 @@ import {
   type SeatTokens,
   type SeatVisualState,
 } from '@/lib/seat-object';
+import {
+  RESET_EVENT,
+  SEATS_EVENT,
+  STRESS_EVENT,
+  type SeatsDetail,
+  type StressDetail,
+} from '@/lib/demo-events';
 
 export type Seat = {
   id: string;
@@ -260,6 +267,18 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
       for (const mesh of entry.object.meshes) meshToSeat.set(mesh, entry);
     }
     const pickTargets = entries.flatMap((entry) => entry.object.meshes);
+    const seatById = new Map(entries.map((entry) => [entry.data.id, entry]));
+
+    /**
+     * Tell the HUD the current tally. The scene is the only thing that knows
+     * a seat's live state — every path that changes one calls this, so the
+     * counts can never drift from what is actually on screen.
+     */
+    const publishCounts = () => {
+      const claimed = entries.reduce((n, entry) => n + (entry.state === 'open' ? 0 : 1), 0);
+      const detail: SeatsDetail = { open: entries.length - claimed, claimed };
+      window.dispatchEvent(new CustomEvent(SEATS_EVENT, { detail }));
+    };
 
     // ── Post-processing: selective bloom ───────────────────────────────────
     // Two chains. The first renders the scene with every non-emitting mesh
@@ -417,6 +436,100 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
       });
     };
 
+    // ── Stress-test swarm ──────────────────────────────────────────────────
+    // The brief's picture of the race: N claims converge on one seat, one
+    // lands and lights it, the rest deflect. Every number driving this comes
+    // back from the server AFTER the real run has finished — the animation
+    // reports a result, it never predicts one.
+    type Swarm = {
+      points: THREE.Points;
+      geometry: THREE.BufferGeometry;
+      material: THREE.PointsMaterial;
+      origins: Float32Array;
+      velocities: Float32Array;
+      colors: Float32Array;
+      target: THREE.Vector3;
+      count: number;
+      /** Index of the particle that lands. -1 when the server reported no winner. */
+      winner: number;
+      entry: SeatEntry;
+      t: number;
+      landed: boolean;
+    };
+    const swarms: Swarm[] = [];
+
+    const INBOUND = 0.85; // seconds of convergence
+    const OUTBOUND = 0.9; // seconds of deflection afterwards
+
+    const spawnSwarm = (entry: SeatEntry, total: number, winners: number) => {
+      const count = Math.min(total, 80);
+      const target = entry.home.clone().setY(SEAT_EYE);
+
+      const positions = new Float32Array(count * 3);
+      const origins = new Float32Array(count * 3);
+      const velocities = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+
+      // The winner is a real index so the landing reads as one of the crowd
+      // arriving, not a separate effect played on top of it.
+      const winner = winners > 0 ? Math.floor(Math.random() * count) : -1;
+
+      for (let i = 0; i < count; i++) {
+        // A shell around the seat, flattened in Y so the swarm reads against
+        // the grid rather than as a ball.
+        const theta = (i / count) * Math.PI * 2 + Math.random() * 0.4;
+        const radius = 4.2 + Math.random() * 2.6;
+        const height = (Math.random() - 0.5) * 2.4;
+
+        origins[i * 3] = target.x + Math.cos(theta) * radius;
+        origins[i * 3 + 1] = target.y + height;
+        origins[i * 3 + 2] = target.z + Math.sin(theta) * radius * 0.75;
+
+        positions[i * 3] = origins[i * 3];
+        positions[i * 3 + 1] = origins[i * 3 + 1];
+        positions[i * 3 + 2] = origins[i * 3 + 2];
+
+        // Colour carries the verdict: the one that lands is the accent, the
+        // rest die cold. Reserving the accent for the seat that is actually
+        // won is the same rule the seat materials follow.
+        const tint = i === winner ? tokens.accent : tokens.inkDim;
+        colors[i * 3] = tint.r;
+        colors[i * 3 + 1] = tint.g;
+        colors[i * 3 + 2] = tint.b;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const material = new THREE.PointsMaterial({
+        size: 0.075,
+        vertexColors: true,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+
+      const points = new THREE.Points(geometry, material);
+      points.layers.enable(BLOOM_LAYER); // the swarm is light, so it blooms
+      scene.add(points);
+
+      swarms.push({
+        points,
+        geometry,
+        material,
+        origins,
+        velocities,
+        colors,
+        target,
+        count,
+        winner,
+        entry,
+        t: 0,
+        landed: false,
+      });
+    };
+
     // ── Interaction ────────────────────────────────────────────────────────
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -460,12 +573,14 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
           entry.state = 'mine';
           paintSeat(entry.object, entry.state, tokens);
           spawnBurst(entry.home);
+          publishCounts();
         } else if (response.status === 409) {
           // Someone else holds it. The server just told us the truth about a
           // seat we believed was open, so correct the view.
           entry.state = 'claimed';
           paintSeat(entry.object, entry.state, tokens);
           entry.shake = 0.42;
+          publishCounts();
         } else {
           // 403 cap reached, 429 rate limited, 4xx/5xx otherwise. The seat is
           // still open — only the caller was refused.
@@ -487,6 +602,46 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
 
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('click', onClick as EventListener);
+
+    // ── HUD bridge ─────────────────────────────────────────────────────────
+    const onStress = (event: Event) => {
+      const detail = (event as CustomEvent<StressDetail>).detail;
+      const entry = seatById.get(detail.seatId);
+      if (!entry) return;
+
+      // The server has already decided. Apply that NOW, before any animation:
+      // the seat's appearance is supposed to BE its real state, so it must not
+      // wait on frames that may never arrive. A backgrounded tab gets no
+      // requestAnimationFrame at all, and an earlier version of this hung the
+      // state change off the particles landing — which left a seat the server
+      // had confirmed as taken still showing as open, indefinitely.
+      if (detail.winners > 0) {
+        // The winner is one of fifty strangers, not this browser, so the seat
+        // settles into `claimed` rather than `mine` — which is the truth.
+        entry.state = 'claimed';
+        paintSeat(entry.object, entry.state, tokens);
+      }
+      publishCounts();
+
+      // The swarm is now purely how the result is narrated. If it never runs,
+      // nothing about what the page is claiming changes.
+      if (reducedMotion) return;
+      spawnSwarm(entry, detail.winners + detail.rejected, detail.winners);
+    };
+
+    const onReset = () => {
+      for (const entry of entries) {
+        entry.state = 'open';
+        entry.flash = 0;
+        entry.shake = 0;
+        paintSeat(entry.object, entry.state, tokens);
+      }
+      publishCounts();
+    };
+
+    window.addEventListener(STRESS_EVENT, onStress);
+    window.addEventListener(RESET_EVENT, onReset);
+    publishCounts(); // seed the HUD from the scene's own state
 
     // ── Loop ───────────────────────────────────────────────────────────────
     const started = performance.now();
@@ -687,6 +842,92 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
         burst.material.opacity = burst.life / burst.maxLife;
       }
 
+      // ── Swarm ────────────────────────────────────────────────────────────
+      for (let w = swarms.length - 1; w >= 0; w--) {
+        const swarm = swarms[w];
+        swarm.t += dt;
+
+        const attribute = swarm.geometry.getAttribute('position') as THREE.BufferAttribute;
+        const array = attribute.array as Float32Array;
+        const tint = swarm.geometry.getAttribute('color') as THREE.BufferAttribute;
+        const tints = tint.array as Float32Array;
+
+        if (swarm.t < INBOUND) {
+          // Converge. Accelerating inward reads as being pulled in rather
+          // than drifting.
+          const k = swarm.t / INBOUND;
+          const ease = k * k;
+          for (let i = 0; i < swarm.count; i++) {
+            const p = i * 3;
+            array[p] = swarm.origins[p] + (swarm.target.x - swarm.origins[p]) * ease;
+            array[p + 1] = swarm.origins[p + 1] + (swarm.target.y - swarm.origins[p + 1]) * ease;
+            array[p + 2] = swarm.origins[p + 2] + (swarm.target.z - swarm.origins[p + 2]) * ease;
+          }
+          swarm.material.opacity = Math.min(1, swarm.t / 0.18);
+        } else {
+          if (!swarm.landed) {
+            swarm.landed = true;
+
+            // The moment of arrival — punctuation only. The seat already
+            // carries the state the server reported; this is the flash and
+            // the burst that say which one of the fifty got there.
+            if (swarm.winner >= 0) {
+              swarm.entry.flash = 0.5;
+              spawnBurst(swarm.entry.home);
+            } else {
+              swarm.entry.shake = 0.42;
+            }
+
+            for (let i = 0; i < swarm.count; i++) {
+              const p = i * 3;
+              if (i === swarm.winner) {
+                // It landed — it does not come back out.
+                tints[p] = tints[p + 1] = tints[p + 2] = 0;
+                continue;
+              }
+              // Deflect back out along the way it came in, with some spread.
+              const dx = swarm.origins[p] - swarm.target.x;
+              const dy = swarm.origins[p + 1] - swarm.target.y;
+              const dz = swarm.origins[p + 2] - swarm.target.z;
+              const length = Math.hypot(dx, dy, dz) || 1;
+              const speed = 2.6 + Math.random() * 2.2;
+              swarm.velocities[p] = (dx / length) * speed;
+              swarm.velocities[p + 1] = (dy / length) * speed + 0.8;
+              swarm.velocities[p + 2] = (dz / length) * speed;
+            }
+          }
+
+          const out = (swarm.t - INBOUND) / OUTBOUND;
+          for (let i = 0; i < swarm.count; i++) {
+            const p = i * 3;
+            array[p] += swarm.velocities[p] * dt;
+            array[p + 1] += swarm.velocities[p + 1] * dt;
+            array[p + 2] += swarm.velocities[p + 2] * dt;
+            swarm.velocities[p + 1] -= 3.2 * dt; // gravity
+          }
+          // Additive blending, so dimming the colour IS the fade — and the
+          // one that landed is already black, so it simply is not there.
+          const fade = Math.max(0, 1 - out);
+          for (let i = 0; i < swarm.count; i++) {
+            const p = i * 3;
+            if (i === swarm.winner) continue;
+            tints[p] = swarm.colors[p] * fade;
+            tints[p + 1] = swarm.colors[p + 1] * fade;
+            tints[p + 2] = swarm.colors[p + 2] * fade;
+          }
+          tint.needsUpdate = true;
+
+          if (swarm.t >= INBOUND + OUTBOUND) {
+            scene.remove(swarm.points);
+            swarm.geometry.dispose();
+            swarm.material.dispose();
+            swarms.splice(w, 1);
+            continue;
+          }
+        }
+        attribute.needsUpdate = true;
+      }
+
       // ── Render: the bloom chain, then the scene with the bloom added back ─
       const background = scene.background;
       const fog = scene.fog;
@@ -742,6 +983,8 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('mousemove', onMouse);
+      window.removeEventListener(STRESS_EVENT, onStress);
+      window.removeEventListener(RESET_EVENT, onReset);
       observer.disconnect();
       bodyObserver.disconnect();
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
@@ -753,6 +996,10 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
       for (const burst of bursts) {
         burst.geometry.dispose();
         burst.material.dispose();
+      }
+      for (const swarm of swarms) {
+        swarm.geometry.dispose();
+        swarm.material.dispose();
       }
       disposeSeatGeometry(geometry);
       dark.dispose();

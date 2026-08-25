@@ -80,6 +80,20 @@ export function getSession(request: NextRequest): Session {
   return { id: randomBytes(32).toString('hex'), isNew: true };
 }
 
+/**
+ * Mints a fresh session and the cookie value that authenticates it.
+ *
+ * SERVER-SIDE SIMULATION ONLY. The stress-test route uses this to synthesise
+ * the 50 independent claimants it fans out to the claim handler, because that
+ * handler derives identity from the cookie and nothing else. It hands out no
+ * new authority — this process can already sign session ids — and it never
+ * exposes SESSION_SECRET. It is not reachable from any request path.
+ */
+export function mintSession(): { id: string; cookie: string } {
+  const id = randomBytes(32).toString('hex');
+  return { id, cookie: `${SESSION_COOKIE}=${id}.${sign(id)}` };
+}
+
 /** Attaches the Set-Cookie header when a session was newly minted. */
 export function attachSession<T>(
   response: NextResponse<T>,

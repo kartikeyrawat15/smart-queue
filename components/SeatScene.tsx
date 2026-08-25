@@ -534,6 +534,17 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
       //    a narrower screen the vertical fov widens to hold the same
       //    horizontal framing, and once that would start to distort, the
       //    camera dollies back for the remainder instead.
+      //
+      //    Verifying this at ~390x844: Chrome's window-resize automation is
+      //    ignored when the OS window is snapped/maximised, so the viewport
+      //    never actually changes and the check silently passes against a
+      //    desktop frame. Load the page in a same-origin iframe sized
+      //    390x844 instead — a temporary page under public/ works — because
+      //    an iframe is a real viewport: matchMedia, the CSS media queries
+      //    and mount.clientWidth/Height all resolve against it, so this
+      //    branch and the portrait scrim are genuinely exercised. Note the
+      //    scene pauses on visibilitychange, so keep the tab focused and give
+      //    the camera a second to ease before judging a frame.
       const hHalfTan = Math.tan(THREE.MathUtils.degToRad(fovRef) / 2) * REF_ASPECT;
       const needTan = hHalfTan / camera.aspect;
       const haveTan = Math.min(needTan, Math.tan(THREE.MathUtils.degToRad(MAX_VFOV) / 2));

@@ -34,3 +34,37 @@ body {
 body {
   overflow-x: hidden;
 }
+
+/* The scene runs behind the story copy for the whole opening shot, so the
+   copy needs its own ground to sit on. This is a directional scrim in the
+   background token — the side the text occupies is solid --bg, and it falls
+   away to nothing over the side the hero seat is framed into. Its opacity is
+   driven from the scroll progress in SeatScene and reaches 0 by the time the
+   grid is the frame, at which point the scene is unobstructed.
+
+   Derived from --bg via color-mix rather than a literal, so it cannot drift
+   from design-tokens.css. */
+.scene-scrim {
+  pointer-events: none;
+  background: linear-gradient(
+    92deg,
+    var(--bg) 0%,
+    var(--bg) 30%,
+    color-mix(in srgb, var(--bg) 82%, transparent) 52%,
+    transparent 78%
+  );
+}
+
+/* Portrait: the copy runs full width, so the scrim runs top-down instead and
+   the camera drops the seat below the text rather than beside it. */
+@media (max-width: 900px) {
+  .scene-scrim {
+    background: linear-gradient(
+      180deg,
+      var(--bg) 0%,
+      var(--bg) 30%,
+      color-mix(in srgb, var(--bg) 68%, transparent) 55%,
+      transparent 82%
+    );
+  }
+}

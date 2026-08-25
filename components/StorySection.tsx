@@ -43,7 +43,7 @@ export default function StorySection({
 }) {
   return (
     <section
-      className="relative flex min-h-screen flex-col justify-center"
+      className="relative z-10 flex min-h-screen flex-col justify-center"
       style={{ paddingInline: 'var(--gutter)', paddingBlock: 'clamp(48px, 8vh, 96px)' }}
     >
       <BlurFade delay={0.05} inView>

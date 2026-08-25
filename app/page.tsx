@@ -1,5 +1,5 @@
 import { sql } from '@/lib/db';
-import SeatGrid, { type Seat } from '@/components/SeatGrid';
+import SeatScene, { type Seat } from '@/components/SeatScene';
 import StorySection from '@/components/StorySection';
 
 // Seat availability changes constantly; never serve a cached snapshot.
@@ -23,9 +23,17 @@ export default async function Home() {
 
   return (
     <main>
+      {/* One canvas for the whole page. It is fixed behind the content: the
+          shot starts tight on a single seat beside the story copy and pulls
+          back on scroll until the grid below is the frame. The story and the
+          grid are not two scenes — they are two ends of one camera move. */}
+      <SeatScene seats={seats} />
+
       <StorySection claimed={claimed} total={seats.length} />
 
-      <section id="grid" className="relative h-screen w-full">
+      {/* Pointer events stay off so clicks reach the canvas underneath; the
+          scene itself only accepts them once the camera has arrived here. */}
+      <section id="grid" className="pointer-events-none relative z-10 h-screen w-full">
         {/* The canvas is opaque to screen readers and crawlers; this carries
             the same information in the DOM. Visually hidden, not a HUD. */}
         <h2 className="sr-only">Seat grid</h2>
@@ -36,7 +44,6 @@ export default async function Home() {
             </li>
           ))}
         </ul>
-        <SeatGrid seats={seats} />
       </section>
     </main>
   );

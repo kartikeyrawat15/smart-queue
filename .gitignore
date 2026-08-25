@@ -44,6 +44,7 @@ next-env.d.ts
 
 # lighthouse
 .lighthouseci
+.lh-profile
 *.report.html
 
 # python bytecode from skill scripts

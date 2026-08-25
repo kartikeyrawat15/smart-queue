@@ -68,3 +68,5 @@ Use `design-tokens.css`. Suggested base: near-black background, one accent color
 - [ ] Works at desktop and ~390×844 mobile.
 - [ ] `frontend-lighthouse` run before calling it done — should now score, since the story
       section provides real contentful paint.
+      
+    

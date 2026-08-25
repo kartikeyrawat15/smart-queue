@@ -9,7 +9,8 @@
     "lint": "eslint",
     "db:setup": "node scripts/db-setup.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lighthouse": "node scripts/lh-run.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

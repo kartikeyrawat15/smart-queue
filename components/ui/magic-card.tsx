@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react"
 import {
   motion,
   useMotionTemplate,
@@ -73,9 +73,17 @@ export function MagicCard(props: MagicCardProps) {
   const glowBlur = isOrbMode(props) ? (props.glowBlur ?? 60) : 60
   const glowOpacity = isOrbMode(props) ? (props.glowOpacity ?? 0.9) : 0.9
   const { theme, systemTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
 
-  useEffect(() => setMounted(true), [])
+  // Hydration guard for the theme read. Upstream used `useState(false)` plus a
+  // `setState` in an effect, which trips react-hooks/set-state-in-effect and
+  // costs an extra render; `useSyncExternalStore` expresses the same thing
+  // directly — false in the server snapshot, true on the client — with no
+  // subscription, because "are we hydrated yet" never changes after mount.
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  )
 
   const isDarkTheme = useMemo(() => {
     if (!mounted) return true

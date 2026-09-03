@@ -23,7 +23,9 @@
 
   /* ---- motion (the FEEL lives here — tune these, not the scene code) ---- */
   --cam-damp: 5;              /* camera ease rate; higher = tighter, lower = floatier */
-  --reveal:   .6s;           /* section fade / blur duration */
+  --reveal:   .6s;           /* section fade / blur duration — also one word's own reveal */
+  --reveal-stagger: .05s;    /* gap between words in a staggered text reveal (brief: 40-60ms) */
+  --reveal-lag: .18s;        /* pause between a headline landing and its supporting copy */
   --ease:     cubic-bezier(.22,.61,.36,1);
 }
 

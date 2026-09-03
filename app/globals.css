@@ -68,3 +68,17 @@ body {
     );
   }
 }
+
+/* The word-by-word reveal, for readers who asked for less motion.
+   The stagger is switched off in JS (see word-reveal.tsx); the travel and the
+   blur are switched off here, so the line becomes a plain opacity fade with
+   every word arriving at once. It has to be split that way: motion writes the
+   initial variant into the server-rendered style attribute, so branching the
+   markup on prefers-reduced-motion would hydrate a different tree than it
+   rendered. `!important` because those are inline styles, written per frame. */
+@media (prefers-reduced-motion: reduce) {
+  .reveal-word {
+    transform: none !important;
+    filter: none !important;
+  }
+}

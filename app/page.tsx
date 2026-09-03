@@ -38,6 +38,30 @@ export default async function Home() {
         {/* The canvas is opaque to screen readers and crawlers; this carries
             the same information in the DOM. Visually hidden, not a HUD. */}
         <h2 className="sr-only">Seat grid</h2>
+
+        {/* Sits above the grid because a visitor arriving here has been shown
+            the problem but not yet told what the thing in front of them
+            responds to. Label styling, so it reads as chrome and not as
+            another chapter of the story.
+
+            No max-width: `ch` resolves against this element's own font size,
+            so a cap in `ch` at label size is a few hundred pixels and shatters
+            the sentence into six ragged lines. The gutter is the measure. */}
+        <p
+          className="absolute inset-x-0 top-0 mx-auto text-center"
+          style={{
+            paddingInline: 'var(--gutter)',
+            paddingTop: 'clamp(24px, 6vh, 64px)',
+            fontSize: 'var(--label)',
+            letterSpacing: 'var(--tracking-label)',
+            textTransform: 'uppercase',
+            lineHeight: 1.7,
+            color: 'var(--ink-dim)',
+          }}
+        >
+          <span style={{ color: 'var(--ink)' }}>Try it</span> — click any seat to claim it, or run
+          the stress test to watch 50 simultaneous claims resolve to exactly one winner.
+        </p>
         <ul className="sr-only">
           {seats.map((seat) => (
             <li key={seat.id}>

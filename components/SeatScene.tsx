@@ -19,9 +19,11 @@ import {
   type SeatVisualState,
 } from '@/lib/seat-object';
 import {
+  CLAIM_EVENT,
   RESET_EVENT,
   SEATS_EVENT,
   STRESS_EVENT,
+  type ClaimDetail,
   type SeatsDetail,
   type StressDetail,
 } from '@/lib/demo-events';
@@ -563,6 +565,16 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
       if (entry.busy || entry.state !== 'open') return;
       entry.busy = true;
 
+      // Says out loud what the seat is about to show. Nothing about the scene
+      // depends on it — it is how the HUD can caption an outcome that
+      // otherwise only ever exists as a colour on a mesh.
+      const announce = (outcome: ClaimDetail['outcome']) =>
+        window.dispatchEvent(
+          new CustomEvent<ClaimDetail>(CLAIM_EVENT, {
+            detail: { label: entry.data.label, outcome },
+          }),
+        );
+
       try {
         const response = await fetch(`/api/seats/${entry.data.id}/claim`, {
           method: 'POST',
@@ -574,6 +586,7 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
           paintSeat(entry.object, entry.state, tokens);
           spawnBurst(entry.home);
           publishCounts();
+          announce('mine');
         } else if (response.status === 409) {
           // Someone else holds it. The server just told us the truth about a
           // seat we believed was open, so correct the view.
@@ -581,13 +594,16 @@ export default function SeatScene({ seats }: { seats: Seat[] }) {
           paintSeat(entry.object, entry.state, tokens);
           entry.shake = 0.42;
           publishCounts();
+          announce('taken');
         } else {
           // 403 cap reached, 429 rate limited, 4xx/5xx otherwise. The seat is
           // still open — only the caller was refused.
           entry.flash = 0.55;
+          announce('refused');
         }
       } catch {
         entry.flash = 0.55; // network failure: refuse silently, change nothing
+        announce('refused');
       } finally {
         entry.busy = false;
       }
